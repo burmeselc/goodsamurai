@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111111" />
+  <title>Reading Log</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <style>
+    :root{
+      --bg:#f6f6f4; --panel:#ffffff; --text:#161616; --muted:#6d6d6d;
+      --line:#deded8; --accent:#111111; --soft:#ecece8; --danger:#9b1c1c;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      background:var(--bg); color:var(--text);
+    }
+    header{
+      position:sticky; top:0; z-index:10;
+      background:rgba(246,246,244,.94); backdrop-filter:blur(14px);
+      padding:calc(14px + env(safe-area-inset-top)) 16px 12px;
+      border-bottom:1px solid var(--line);
+    }
+    header h1{font-size:22px;margin:0}
+    main{max-width:880px;margin:0 auto;padding:16px 16px calc(110px + env(safe-area-inset-bottom))}
+    .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+    button,.button{
+      appearance:none;border:1px solid var(--line);background:var(--panel);color:var(--text);
+      border-radius:12px;padding:10px 13px;font-size:15px;font-weight:600;cursor:pointer;
+    }
+    button.primary{background:var(--accent);color:white;border-color:var(--accent)}
+    button.danger{color:var(--danger)}
+    input,textarea,select{
+      width:100%; border:1px solid var(--line); background:white; color:var(--text);
+      border-radius:12px; padding:11px 12px; font-size:16px;
+    }
+    textarea{min-height:100px;resize:vertical}
+    label{font-size:13px;color:var(--muted);display:block;margin:10px 0 6px}
+    .card{
+      background:var(--panel); border:1px solid var(--line); border-radius:16px;
+      padding:14px; margin-bottom:12px;
+    }
+    .row{display:flex;gap:10px;align-items:center}
+    .row > *{flex:1}
+    .card h2,.card h3{margin:0 0 6px}
+    .meta{font-size:13px;color:var(--muted)}
+    .progress{height:8px;background:var(--soft);border-radius:999px;overflow:hidden;margin-top:10px}
+    .progress > div{height:100%;background:var(--accent)}
+    .chip{display:inline-block;background:var(--soft);border-radius:999px;padding:4px 8px;font-size:12px;margin:4px 4px 0 0}
+    .hidden{display:none!important}
+    .tabs{
+      position:fixed;left:0;right:0;bottom:0;z-index:20;
+      display:grid;grid-template-columns:repeat(4,1fr);gap:6px;
+      background:rgba(246,246,244,.96);backdrop-filter:blur(14px);
+      padding:8px 10px calc(8px + env(safe-area-inset-bottom));
+      border-top:1px solid var(--line);
+    }
+    .tabs button{padding:10px 6px;font-size:13px}
+    .section-title{font-size:18px;margin:22px 0 10px}
+    .empty{color:var(--muted);text-align:center;padding:28px 10px}
+    .session-live{border:2px solid var(--accent)}
+    .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+    .stat{background:var(--soft);border-radius:12px;padding:10px;text-align:center}
+    .stat strong{display:block;font-size:18px}
+    dialog{border:none;border-radius:16px;padding:0;max-width:620px;width:calc(100% - 24px)}
+    dialog::backdrop{background:rgba(0,0,0,.35)}
+    .dialog-inner{padding:16px;max-height:80vh;overflow:auto}
+    .dialog-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+    @media(max-width:520px){.row{flex-direction:column;align-items:stretch}.stats{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<header><h1>Reading Log</h1></header>
+
+<main>
+  <section id="homeView">
+    <div class="toolbar">
+      <button class="primary" onclick="openAddDoc()">＋ 文献を追加</button>
+      <button onclick="showView('libraryView')">ライブラリ</button>
+    </div>
+    <div id="activeSession"></div>
+    <h2 class="section-title">最近の文献</h2>
+    <div id="recentDocs"></div>
+    <h2 class="section-title">概要</h2>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <section id="libraryView" class="hidden">
+    <input id="searchBox" placeholder="タイトル・著者・タグ・メモを検索" oninput="renderLibrary()">
+    <div style="height:12px"></div>
+    <select id="categoryFilter" onchange="renderLibrary()">
+      <option value="">すべてのカテゴリ</option>
+    </select>
+    <div style="height:12px"></div>
+    <div id="libraryList"></div>
+  </section>
+
+  <section id="notesView" class="hidden">
+    <input id="noteSearch" placeholder="全メモを検索" oninput="renderNotes()">
+    <div style="height:12px"></div>
+    <div id="notesList"></div>
+  </section>
+
+  <section id="dataView" class="hidden">
+    <div class="card">
+      <h3>バックアップ / 書き出し</h3>
+      <p class="meta">JSONは完全バックアップ。CSVは表計算向け。Markdownは人間が読む用途向けです。</p>
+      <div class="toolbar">
+        <button onclick="exportJSON()">JSON</button>
+        <button onclick="exportCSV()">CSV</button>
+        <button onclick="exportMarkdown()">Markdown</button>
+      </div>
+      <label>JSONから復元</label>
+      <input type="file" accept=".json,application/json" onchange="importJSON(event)">
+    </div>
+    <div class="card">
+      <h3>保存状態</h3>
+      <div id="storageInfo" class="meta"></div>
+    </div>
+  </section>
+
+  <section id="docView" class="hidden">
+    <div id="docDetail"></div>
+  </section>
+</main>
+
+<nav class="tabs">
+  <button onclick="showView('homeView')">Home</button>
+  <button onclick="showView('libraryView')">Library</button>
+  <button onclick="showView('notesView')">Notes</button>
+  <button onclick="showView('dataView')">Data</button>
+</nav>
+
+<dialog id="docDialog">
+  <div class="dialog-inner">
+    <h3 id="docDialogTitle">文献を追加</h3>
+    <input type="hidden" id="docId">
+    <label>タイトル *</label><input id="docTitle">
+    <label>著者</label><input id="docAuthor">
+    <div class="row">
+      <div><label>年</label><input id="docYear" inputmode="numeric"></div>
+      <div><label>総ページ</label><input id="docTotalPages" inputmode="numeric"></div>
+    </div>
+    <label>カテゴリ</label><input id="docCategory" placeholder="例：歴史言語学">
+    <label>タグ（カンマ区切り）</label><input id="docTags" placeholder="例：Shan, aspect, 修論">
+    <label>DOI / URL / NCID</label><input id="docLink">
+    <label>備考</label><textarea id="docRemarks"></textarea>
+    <div class="dialog-actions">
+      <button onclick="docDialog.close()">キャンセル</button>
+      <button class="primary" onclick="saveDocument()">保存</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="endSessionDialog">
+  <div class="dialog-inner">
+    <h3>読書終了</h3>
+    <div id="endSessionSummary" class="meta"></div>
+    <label>終了ページ *</label><input id="endPage" inputmode="numeric">
+    <label>このセッションのメモ</label><textarea id="sessionMemo" placeholder="任意"></textarea>
+    <div class="dialog-actions">
+      <button onclick="endSessionDialog.close()">戻る</button>
+      <button class="primary" onclick="finishSession()">保存して終了</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="noteDialog">
+  <div class="dialog-inner">
+    <h3>メモを追加</h3>
+    <input type="hidden" id="noteDocId">
+    <div class="row">
+      <div>
+        <label>種類</label>
+        <select id="noteType"><option>MEMO</option><option>QUOTE</option><option>TODO</option></select>
+      </div>
+      <div>
+        <label>ページ</label><input id="notePage" inputmode="numeric">
+      </div>
+    </div>
+    <label>本文 *</label><textarea id="noteText"></textarea>
+    <label>タグ（カンマ区切り）</label><input id="noteTags">
+    <div class="dialog-actions">
+      <button onclick="noteDialog.close()">キャンセル</button>
+      <button class="primary" onclick="saveNote()">保存</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+const STORAGE_KEY = "readingLogData.v1";
+let currentDocId = null;
+
+function uid(prefix="id"){
+  return prefix+"_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,8);
+}
+function nowISO(){ return new Date().toISOString(); }
+function fmtDate(iso){
+  if(!iso) return "";
+  return new Intl.DateTimeFormat("ja-JP",{dateStyle:"medium",timeStyle:"short"}).format(new Date(iso));
+}
+function loadData(){
+  try{
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {documents:[],sessions:[],notes:[],activeSession:null,updatedAt:null};
+  }catch(e){
+    return {documents:[],sessions:[],notes:[],activeSession:null,updatedAt:null};
+  }
+}
+let data = loadData();
+function saveData(){
+  data.updatedAt = nowISO();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  renderAll();
+}
+function tags(v){ return v.split(",").map(x=>x.trim()).filter(Boolean); }
+function esc(s){
+  return String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]));
+}
+function getDoc(id){ return data.documents.find(d=>d.id===id); }
+function docSessions(id){ return data.sessions.filter(s=>s.documentId===id).sort((a,b)=>new Date(b.start)-new Date(a.start)); }
+function docNotes(id){ return data.notes.filter(n=>n.documentId===id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)); }
+function lastPage(id){
+  const ss = docSessions(id);
+  if(!ss.length) return 0;
+  return Math.max(...ss.map(s=>Number(s.endPage)||0));
+}
+function showView(id){
+  ["homeView","libraryView","notesView","dataView","docView"].forEach(v=>document.getElementById(v).classList.add("hidden"));
+  document.getElementById(id).classList.remove("hidden");
+  if(id==="libraryView") renderLibrary();
+  if(id==="notesView") renderNotes();
+  if(id==="dataView") renderStorageInfo();
+  if(id==="homeView") renderHome();
+}
+function openAddDoc(){
+  docId.value=""; docTitle.value=""; docAuthor.value=""; docYear.value=""; docTotalPages.value="";
+  docCategory.value=""; docTags.value=""; docLink.value=""; docRemarks.value="";
+  docDialogTitle.textContent="文献を追加"; docDialog.showModal();
+}
+function editDoc(id){
+  const d=getDoc(id); if(!d)return;
+  docId.value=d.id; docTitle.value=d.title||""; docAuthor.value=d.author||""; docYear.value=d.year||"";
+  docTotalPages.value=d.totalPages||""; docCategory.value=d.category||""; docTags.value=(d.tags||[]).join(", ");
+  docLink.value=d.link||""; docRemarks.value=d.remarks||"";
+  docDialogTitle.textContent="文献を編集"; docDialog.showModal();
+}
+function saveDocument(){
+  if(!docTitle.value.trim()){ alert("タイトルは必須です"); return; }
+  const id=docId.value||uid("doc");
+  const obj={
+    id, title:docTitle.value.trim(), author:docAuthor.value.trim(), year:docYear.value.trim(),
+    totalPages:Number(docTotalPages.value)||null, category:docCategory.value.trim(),
+    tags:tags(docTags.value), link:docLink.value.trim(), remarks:docRemarks.value.trim(),
+    createdAt: docId.value ? getDoc(id).createdAt : nowISO(), updatedAt:nowISO()
+  };
+  const i=data.documents.findIndex(d=>d.id===id);
+  if(i>=0)data.documents[i]=obj; else data.documents.push(obj);
+  docDialog.close(); currentDocId=id; saveData(); openDoc(id);
+}
+function deleteDoc(id){
+  if(!confirm("この文献と関連するセッション・メモを削除します。よろしいですか？"))return;
+  data.documents=data.documents.filter(d=>d.id!==id);
+  data.sessions=data.sessions.filter(s=>s.documentId!==id);
+  data.notes=data.notes.filter(n=>n.documentId!==id);
+  if(data.activeSession?.documentId===id)data.activeSession=null;
+  saveData(); showView("libraryView");
+}
+function openDoc(id){
+  currentDocId=id; renderDoc(id); showView("docView");
+}
+function renderHome(){
+  const docs=[...data.documents].sort((a,b)=>{
+    const la=docSessions(a.id)[0]?.start||a.updatedAt||a.createdAt;
+    const lb=docSessions(b.id)[0]?.start||b.updatedAt||b.createdAt;
+    return new Date(lb)-new Date(la);
+  }).slice(0,5);
+  recentDocs.innerHTML=docs.length?docs.map(docCard).join(""):'<div class="empty">文献がまだありません。</div>';
+
+  if(data.activeSession){
+    const d=getDoc(data.activeSession.documentId);
+    const elapsed=Math.floor((Date.now()-new Date(data.activeSession.start))/60000);
+    activeSession.innerHTML=`<div class="card session-live">
+      <div class="meta">読書中</div><h3>${esc(d?.title||"")}</h3>
+      <div class="meta">開始 ${fmtDate(data.activeSession.start)} / p.${esc(data.activeSession.startPage)} / ${elapsed}分経過</div>
+      <div class="toolbar" style="margin-top:10px">
+        <button onclick="openDoc('${data.activeSession.documentId}')">開く</button>
+        <button class="primary" onclick="openEndSession()">終了</button>
+      </div></div>`;
+  }else activeSession.innerHTML="";
+
+  const totalMin=data.sessions.reduce((a,s)=>a+(s.durationMin||0),0);
+  const totalPages=data.sessions.reduce((a,s)=>a+Math.max(0,(Number(s.endPage)||0)-(Number(s.startPage)||0)),0);
+  stats.innerHTML=`
+    <div class="stat"><strong>${data.documents.length}</strong><span class="meta">文献</span></div>
+    <div class="stat"><strong>${Math.round(totalMin/60*10)/10}h</strong><span class="meta">読書時間</span></div>
+    <div class="stat"><strong>${totalPages}</strong><span class="meta">記録ページ</span></div>`;
+}
+function docCard(d){
+  const p=lastPage(d.id), total=Number(d.totalPages)||0, pct=total?Math.min(100,Math.round(p/total*100)):0;
+  return `<div class="card" onclick="openDoc('${d.id}')">
+    <h3>${esc(d.title)}</h3>
+    <div class="meta">${esc(d.author||"")}${d.year?" · "+esc(d.year):""}${d.category?" · "+esc(d.category):""}</div>
+    <div class="meta" style="margin-top:6px">${total?`p.${p} / ${total} (${pct}%)`:`最終ページ p.${p}`}</div>
+    ${total?`<div class="progress"><div style="width:${pct}%"></div></div>`:""}
+    <div>${(d.tags||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join("")}</div>
+  </div>`;
+}
+function renderLibrary(){
+  const q=(searchBox.value||"").toLowerCase().trim();
+  const cat=categoryFilter.value||"";
+  const cats=[...new Set(data.documents.map(d=>d.category).filter(Boolean))].sort();
+  const old=categoryFilter.value;
+  categoryFilter.innerHTML='<option value="">すべてのカテゴリ</option>'+cats.map(c=>`<option ${c===old?"selected":""}>${esc(c)}</option>`).join("");
+
+  const docs=data.documents.filter(d=>{
+    const notes=docNotes(d.id).map(n=>n.text).join(" ");
+    const hay=[d.title,d.author,d.category,(d.tags||[]).join(" "),notes].join(" ").toLowerCase();
+    return (!q||hay.includes(q)) && (!cat||d.category===cat);
+  }).sort((a,b)=>a.title.localeCompare(b.title,"ja"));
+  libraryList.innerHTML=docs.length?docs.map(docCard).join(""):'<div class="empty">該当する文献がありません。</div>';
+}
+function renderDoc(id){
+  const d=getDoc(id); if(!d)return;
+  const ss=docSessions(id), ns=docNotes(id), p=lastPage(id), total=Number(d.totalPages)||0, pct=total?Math.min(100,Math.round(p/total*100)):0;
+  const isActive=data.activeSession?.documentId===id;
+  docDetail.innerHTML=`
+    <div class="card">
+      <div class="meta">${esc(d.category||"未分類")}</div>
+      <h2>${esc(d.title)}</h2>
+      <div>${esc(d.author||"")}${d.year?" ("+esc(d.year)+")":""}</div>
+      <div class="meta" style="margin-top:8px">${total?`p.${p} / ${total} · ${pct}%`:`最終ページ p.${p}`}</div>
+      ${total?`<div class="progress"><div style="width:${pct}%"></div></div>`:""}
+      <div>${(d.tags||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join("")}</div>
+      ${d.remarks?`<p>${esc(d.remarks)}</p>`:""}
+      ${d.link?`<div class="meta">${esc(d.link)}</div>`:""}
+      <div class="toolbar" style="margin-top:12px">
+        ${isActive?`<button class="primary" onclick="openEndSession()">読書終了</button>`:
+          data.activeSession?`<button disabled>別の文献を読書中</button>`:
+          `<button class="primary" onclick="startSession('${d.id}')">読書開始</button>`}
+        <button onclick="openNote('${d.id}')">＋ メモ</button>
+        <button onclick="editDoc('${d.id}')">編集</button>
+        <button class="danger" onclick="deleteDoc('${d.id}')">削除</button>
+      </div>
+    </div>
+
+    <h3 class="section-title">Notes</h3>
+    ${ns.length?ns.map(n=>`<div class="card">
+      <div class="meta">${esc(n.type)}${n.page?` · p.${esc(n.page)}`:""} · ${fmtDate(n.createdAt)}</div>
+      <div style="white-space:pre-wrap;margin-top:6px">${esc(n.text)}</div>
+      <div>${(n.tags||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join("")}</div>
+      <div class="toolbar" style="margin-top:8px"><button class="danger" onclick="deleteNote('${n.id}','${id}')">削除</button></div>
+    </div>`).join(""):'<div class="empty">メモはありません。</div>'}
+
+    <h3 class="section-title">Sessions</h3>
+    ${ss.length?ss.map(s=>`<div class="card">
+      <div><strong>${fmtDate(s.start)}</strong></div>
+      <div class="meta">p.${s.startPage}–${s.endPage} · ${s.durationMin}分</div>
+      ${s.memo?`<div style="white-space:pre-wrap;margin-top:8px">${esc(s.memo)}</div>`:""}
+    </div>`).join(""):'<div class="empty">読書ログはありません。</div>'}
+  `;
+}
+function startSession(id){
+  const d=getDoc(id); if(!d)return;
+  const suggested=lastPage(id)||1;
+  const start=prompt(`開始ページを入力してください\n${d.title}`, suggested);
+  if(start===null)return;
+  const n=Number(start); if(!Number.isFinite(n)||n<0){alert("ページ番号が不正です");return;}
+  data.activeSession={id:uid("active"),documentId:id,start:nowISO(),startPage:n};
+  saveData(); openDoc(id);
+}
+function openEndSession(){
+  if(!data.activeSession)return;
+  const d=getDoc(data.activeSession.documentId);
+  endSessionSummary.textContent=`${d?.title||""} / 開始 ${fmtDate(data.activeSession.start)} / p.${data.activeSession.startPage}`;
+  endPage.value=data.activeSession.startPage; sessionMemo.value="";
+  endSessionDialog.showModal();
+}
+function finishSession(){
+  if(!data.activeSession)return;
+  const ep=Number(endPage.value); if(!Number.isFinite(ep)){alert("終了ページを入力してください");return;}
+  const a=data.activeSession, end=nowISO();
+  const durationMin=Math.max(1,Math.round((new Date(end)-new Date(a.start))/60000));
+  data.sessions.push({
+    id:uid("ses"),documentId:a.documentId,start:a.start,end,
+    startPage:a.startPage,endPage:ep,durationMin,memo:sessionMemo.value.trim()
+  });
+  const docId=a.documentId; data.activeSession=null; endSessionDialog.close(); saveData(); openDoc(docId);
+}
+function openNote(docId){
+  noteDocId.value=docId; noteType.value="MEMO"; notePage.value=lastPage(docId)||""; noteText.value=""; noteTags.value="";
+  noteDialog.showModal();
+}
+function saveNote(){
+  if(!noteText.value.trim()){alert("本文は必須です");return;}
+  data.notes.push({
+    id:uid("note"),documentId:noteDocId.value,type:noteType.value,page:notePage.value.trim(),
+    text:noteText.value.trim(),tags:tags(noteTags.value),createdAt:nowISO()
+  });
+  const id=noteDocId.value; noteDialog.close(); saveData(); openDoc(id);
+}
+function deleteNote(id,docId){
+  if(!confirm("このメモを削除しますか？"))return;
+  data.notes=data.notes.filter(n=>n.id!==id); saveData(); openDoc(docId);
+}
+function renderNotes(){
+  const q=(noteSearch.value||"").toLowerCase().trim();
+  const notes=[...data.notes].filter(n=>{
+    const d=getDoc(n.documentId);
+    return [n.text,n.type,n.page,(n.tags||[]).join(" "),d?.title,d?.author].join(" ").toLowerCase().includes(q);
+  }).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  notesList.innerHTML=notes.length?notes.map(n=>{
+    const d=getDoc(n.documentId);
+    return `<div class="card" onclick="openDoc('${n.documentId}')">
+      <div class="meta">${esc(d?.title||"")} · ${esc(n.type)}${n.page?` · p.${esc(n.page)}`:""} · ${fmtDate(n.createdAt)}</div>
+      <div style="white-space:pre-wrap;margin-top:6px">${esc(n.text)}</div>
+    </div>`;
+  }).join(""):'<div class="empty">メモはありません。</div>';
+}
+function renderStorageInfo(){
+  const bytes=new Blob([JSON.stringify(data)]).size;
+  storageInfo.innerHTML=`最終更新：${data.updatedAt?fmtDate(data.updatedAt):"未保存"}<br>データサイズ：約 ${(bytes/1024).toFixed(1)} KB`;
+}
+function download(name, text, type="text/plain"){
+  const blob=new Blob([text],{type});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function exportJSON(){ download(`reading-log-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data,null,2), "application/json"); }
+function csvEscape(v){ const s=String(v??""); return `"${s.replaceAll('"','""')}"`; }
+function exportCSV(){
+  const rows=[["type","document_title","author","date_start","date_end","start_page","end_page","duration_min","note_type","note_page","text","tags","category"]];
+  data.sessions.forEach(s=>{
+    const d=getDoc(s.documentId)||{};
+    rows.push(["session",d.title,d.author,s.start,s.end,s.startPage,s.endPage,s.durationMin,"","","", (d.tags||[]).join(";"), d.category]);
+  });
+  data.notes.forEach(n=>{
+    const d=getDoc(n.documentId)||{};
+    rows.push(["note",d.title,d.author,n.createdAt,"","","","",n.type,n.page,n.text,(n.tags||[]).join(";"),d.category]);
+  });
+  download(`reading-log-${new Date().toISOString().slice(0,10)}.csv`, "\uFEFF"+rows.map(r=>r.map(csvEscape).join(",")).join("\n"), "text/csv");
+}
+function exportMarkdown(){
+  let out="# Reading Log\n\n";
+  [...data.documents].sort((a,b)=>a.title.localeCompare(b.title,"ja")).forEach(d=>{
+    out+=`## ${d.title}\n\n`;
+    if(d.author)out+=`${d.author}${d.year?` (${d.year})`:""}\n\n`;
+    if(d.category)out+=`Category: ${d.category}\n\n`;
+    if((d.tags||[]).length)out+=`Tags: ${(d.tags||[]).join(", ")}\n\n`;
+    out+="### Sessions\n\n";
+    docSessions(d.id).slice().reverse().forEach(s=>{
+      out+=`- ${fmtDate(s.start)} — pp. ${s.startPage}–${s.endPage}, ${s.durationMin} min${s.memo?` — ${s.memo}`:""}\n`;
+    });
+    out+="\n### Notes\n\n";
+    docNotes(d.id).slice().reverse().forEach(n=>{
+      out+=`- **${n.type}**${n.page?` p.${n.page}`:""} (${fmtDate(n.createdAt)}): ${n.text.replace(/\n/g," ")}\n`;
+    });
+    out+="\n";
+  });
+  download(`reading-log-${new Date().toISOString().slice(0,10)}.md`, out, "text/markdown");
+}
+function importJSON(event){
+  const file=event.target.files?.[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    try{
+      const imported=JSON.parse(reader.result);
+      if(!imported.documents||!imported.sessions||!imported.notes)throw new Error();
+      if(confirm("現在のデータを、このバックアップで置き換えますか？")){
+        data=imported; saveData(); showView("homeView");
+      }
+    }catch(e){alert("読み込めるReading Log JSONではありません");}
+  };
+  reader.readAsText(file);
+}
+function renderAll(){
+  renderHome();
+  if(!libraryView.classList.contains("hidden"))renderLibrary();
+  if(!notesView.classList.contains("hidden"))renderNotes();
+  if(!dataView.classList.contains("hidden"))renderStorageInfo();
+  if(currentDocId && !docView.classList.contains("hidden"))renderDoc(currentDocId);
+}
+if("serviceWorker" in navigator){ navigator.serviceWorker.register("./sw.js").catch(()=>{}); }
+renderAll();
+</script>
+</body>
+</html>
