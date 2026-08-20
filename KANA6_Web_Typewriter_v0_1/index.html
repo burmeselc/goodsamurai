@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>KANA6 Web Typewriter</title>
+<style>
+:root{
+  --bg:#ebe6d7;
+  --paper:#f7f1df;
+  --ink:#111;
+  --line:#b7ae98;
+  --panel:#d8d0bd;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  background:var(--bg);
+  color:#111;
+}
+header{
+  position:sticky;top:0;z-index:10;
+  display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;
+  padding:.55rem;
+  background:rgba(235,230,215,.96);
+  border-bottom:1px solid #aaa;
+  backdrop-filter:blur(8px);
+}
+button,label.filebtn{
+  appearance:none;border:1px solid #777;background:#f7f4ec;
+  border-radius:.4rem;padding:.55rem .75rem;font-weight:600;
+  cursor:pointer;
+}
+button:active,label.filebtn:active{transform:translateY(1px)}
+input[type=file]{display:none}
+#status{font-size:.85rem;opacity:.75;margin-left:.4rem}
+main{max-width:1200px;margin:auto;padding:.6rem}
+#paperWrap{
+  overflow:auto;
+  border:1px solid #8d8678;
+  background:var(--paper);
+  min-height:52vh;
+  box-shadow:0 2px 12px rgba(0,0,0,.08) inset;
+}
+canvas{display:block;touch-action:none}
+#keyboard{
+  margin-top:.6rem;
+  padding:.55rem;
+  background:var(--panel);
+  border:1px solid #a49b87;
+  border-radius:.5rem;
+  overflow-x:auto;
+}
+.keyrow{
+  display:flex;
+  justify-content:center;
+  gap:3px;
+  min-width:max-content;
+  margin:3px 0;
+}
+.kkey{
+  width:48px;height:48px;padding:0;
+  display:flex;align-items:center;justify-content:center;
+  background:#f9f7f1;
+}
+.kkey canvas{width:34px;height:34px}
+.sep{width:8px}
+.smallnote{
+  margin:.5rem 0 0;
+  font-size:.8rem;opacity:.7;line-height:1.5
+}
+@media(max-width:700px){
+  button,label.filebtn{padding:.5rem .58rem;font-size:.86rem}
+  .kkey{width:43px;height:43px}
+  main{padding:.35rem}
+}
+</style>
+</head>
+<body>
+<header>
+  <button id="newBtn">NEW</button>
+  <label class="filebtn">OPEN<input id="openFile" type="file" accept=".k6t,application/octet-stream"></label>
+  <button id="saveBtn">SAVE .k6t</button>
+  <button id="leftBtn">←</button>
+  <button id="rightBtn">→</button>
+  <button id="backBtn">BACK</button>
+  <button id="retBtn">RETURN</button>
+  <button id="headingBtn">HEADING</button>
+  <button id="emphBtn">EMPH</button>
+  <button id="darkBtn">DARK</button>
+  <span id="status">KANA-6 READY</span>
+</header>
+
+<main>
+  <div id="paperWrap"><canvas id="paper"></canvas></div>
+  <div id="keyboard"></div>
+  <p class="smallnote">
+    文書本文は Unicode テクストとして保持せず、KANA-6 の 6-bit 符号列として扱ひます。
+    OPEN/SAVE は端末内で完結し、サーバーへの送信は行ひません。
+  </p>
+</main>
+
+<script>
+"use strict";
+
+/* ========= KANA-6 CODE TABLE =========
+  0..47 base kana incl. ゐゑ
+  48 SPACE
+  49 DAKUTEN
+  50 HANDAKUTEN
+  51 PERIOD
+  52 COMMA
+  53 NEWLINE
+  54 HEADING_START
+  55 HEADING_END
+  56 EMPH_START
+  57 EMPH_END
+  58 PAGE_BREAK
+  59..63 reserved/control
+*/
+const SYMBOLS = [
+  "あ","い","う","え","お",
+  "か","き","く","け","こ",
+  "さ","し","す","せ","そ",
+  "た","ち","つ","て","と",
+  "な","に","ぬ","ね","の",
+  "は","ひ","ふ","へ","ほ",
+  "ま","み","む","め","も",
+  "や","ゆ","よ",
+  "ら","り","る","れ","ろ",
+  "わ","を","ん",
+  "ゐ","ゑ",
+  " ","゛","゜","。","、","\n",
+  "<H>","</H>","<E>","</E>","<PB>","<R59>","<C60>","<C61>","<C62>","<C63>"
+];
+const SPACE=48, DAK=49, HANDAK=50, PERIOD=51, COMMA=52, NEWLINE=53;
+const HSTART=54, HEND=55, ESTART=56, EEND=57, PAGE=58;
+
+/* ========= BUILD-TIME-LIKE BITMAP FONT =========
+   For web v0.1 we rasterize kana once into an offscreen canvas at startup,
+   then ALL document and keyboard rendering uses the resulting fixed bitmap slots.
+   The document itself remains raw 6-bit KANA-6.
+*/
+const GLYPH_W=24, GLYPH_H=24;
+const glyphs = new Array(64);
+
+function rasterizeGlyphs(){
+  const c=document.createElement("canvas");
+  c.width=GLYPH_W;c.height=GLYPH_H;
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.textAlign="center";x.textBaseline="middle";
+  x.fillStyle="#000";
+  x.font='20px "Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif';
+
+  for(let code=0; code<64; code++){
+    const img = new Uint8Array(GLYPH_W*GLYPH_H);
+    if(code<54 && SYMBOLS[code]!=" " && SYMBOLS[code]!="\n"){
+      x.clearRect(0,0,GLYPH_W,GLYPH_H);
+      x.fillText(SYMBOLS[code],GLYPH_W/2,GLYPH_H/2+1);
+      const d=x.getImageData(0,0,GLYPH_W,GLYPH_H).data;
+      for(let i=0;i<GLYPH_W*GLYPH_H;i++) img[i]=(d[i*4+3]>40)?1:0;
+    }
+    glyphs[code]=img;
+  }
+}
+
+/* ========= K6T2 PACKING ========= */
+function pack6(codes){
+  const bytes=[];
+  let buf=0,bits=0;
+  for(const c of codes){
+    buf=(buf<<6)|(c&63); bits+=6;
+    while(bits>=8){
+      bits-=8;
+      bytes.push((buf>>bits)&255);
+      buf &= (1<<bits)-1;
+    }
+  }
+  if(bits>0) bytes.push((buf<<(8-bits))&255);
+  return new Uint8Array(bytes);
+}
+function unpack6(bytes,count){
+  const out=[];
+  let buf=0,bits=0,idx=0;
+  while(out.length<count){
+    while(bits<6){
+      if(idx>=bytes.length) throw new Error("truncated K6T");
+      buf=(buf<<8)|bytes[idx++]; bits+=8;
+    }
+    bits-=6;
+    out.push((buf>>bits)&63);
+    buf &= (1<<bits)-1;
+  }
+  return out;
+}
+function saveK6T(codes){
+  const payload=pack6(codes);
+  const out=new Uint8Array(8+payload.length);
+  out.set([0x4b,0x36,0x54,0x32],0); // K6T2
+  const n=codes.length>>>0;
+  out[4]=(n>>>24)&255;out[5]=(n>>>16)&255;out[6]=(n>>>8)&255;out[7]=n&255;
+  out.set(payload,8);
+  return out;
+}
+function loadK6T(buf){
+  const d=new Uint8Array(buf);
+  if(d.length<8 || d[0]!=0x4b || d[1]!=0x36 || d[2]!=0x54 || d[3]!=0x32)
+    throw new Error("K6T2 ではありません");
+  const n=((d[4]<<24)>>>0)|(d[5]<<16)|(d[6]<<8)|d[7];
+  return unpack6(d.slice(8),n);
+}
+
+/* ========= DOCUMENT STATE ========= */
+let codes=[];
+let cursor=0;
+let headingOpen=false, emphOpen=false, dark=true;
+let currentName="document.k6t";
+
+const paper=document.getElementById("paper");
+const ctx=paper.getContext("2d");
+const status=document.getElementById("status");
+
+function insertCode(c){
+  codes.splice(cursor,0,c); cursor++;
+  render();
+}
+function backspace(){
+  if(cursor>0){ cursor--; codes.splice(cursor,1); render(); }
+}
+function moveLeft(){cursor=Math.max(0,cursor-1);render();}
+function moveRight(){cursor=Math.min(codes.length,cursor+1);render();}
+
+function toggleHeading(){
+  insertCode(headingOpen?HEND:HSTART);
+  headingOpen=!headingOpen;
+  status.textContent=headingOpen?"HEADING START":"HEADING END";
+}
+function toggleEmph(){
+  insertCode(emphOpen?EEND:ESTART);
+  emphOpen=!emphOpen;
+  status.textContent=emphOpen?"EMPH START":"EMPH END";
+}
+
+/* ========= BITMAP DRAWING ========= */
+function drawGlyph(code,x,y,scale=1,bold=false){
+  const g=glyphs[code];
+  ctx.fillStyle="#111";
+  for(let yy=0;yy<GLYPH_H;yy++){
+    for(let xx=0;xx<GLYPH_W;xx++){
+      if(g[yy*GLYPH_W+xx]){
+        ctx.fillRect(x+xx*scale,y+yy*scale,scale,scale);
+        if(bold) ctx.fillRect(x+xx*scale+1,y+yy*scale,scale,scale);
+      }
+    }
+  }
+}
+function layout(){
+  const wrap=document.getElementById("paperWrap");
+  const W=Math.max(760,wrap.clientWidth-2);
+  const margin=28;
+  let x=margin,y=margin;
+  let heading=false,emph=false;
+  const pos=new Map();
+
+  for(let i=0;i<codes.length;i++){
+    const c=codes[i];
+    pos.set(i,{x,y,heading,emph});
+    if(c===HSTART){heading=true;continue}
+    if(c===HEND){heading=false;continue}
+    if(c===ESTART){emph=true;continue}
+    if(c===EEND){emph=false;continue}
+    if(c===PAGE){x=margin;y+=100;continue}
+    if(c===NEWLINE){x=margin;y+=heading?72:42;continue}
+
+    const step=heading?54:34;
+    x+=step;
+    if(x+step>W-margin){x=margin;y+=heading?72:42}
+  }
+  pos.set(codes.length,{x,y,heading,emph});
+  return {W,H:Math.max(500,y+100),pos};
+}
+function render(){
+  const L=layout();
+  paper.width=L.W;paper.height=L.H;
+  ctx.fillStyle="#f7f1df";ctx.fillRect(0,0,paper.width,paper.height);
+
+  let heading=false,emph=false;
+  for(let i=0;i<codes.length;i++){
+    const c=codes[i];
+    if(c===HSTART){heading=true;continue}
+    if(c===HEND){heading=false;continue}
+    if(c===ESTART){emph=true;continue}
+    if(c===EEND){emph=false;continue}
+    if(c===PAGE||c===NEWLINE) continue;
+    if(c===DAK||c===HANDAK) continue;
+
+    const p=L.pos.get(i), scale=heading?2:1;
+    drawGlyph(c,p.x,p.y,scale,dark||heading||emph);
+
+    if(i+1<codes.length && (codes[i+1]===DAK||codes[i+1]===HANDAK)){
+      drawGlyph(codes[i+1],p.x+(heading?28:16),p.y-(heading?10:6),scale,dark||heading||emph);
+      i++;
+    }
+  }
+  const cp=L.pos.get(cursor)||L.pos.get(codes.length);
+  ctx.fillStyle="#111";
+  ctx.fillRect(cp.x,cp.y+30,24,2);
+}
+
+/* ========= KEYBOARD ========= */
+const rows=[
+  [0,1,2,3,4,SPACE,PERIOD,COMMA],
+  [5,6,7,8,9,10,11,12,13,14],
+  [15,16,17,18,19,20,21,22,23,24],
+  [25,26,27,28,29,30,31,32,33,34],
+  [35,36,37,38,39,40,41,42,43,44,45],
+  [46,47,DAK,HANDAK]
+];
+function drawKeyCanvas(cv,code){
+  cv.width=34;cv.height=34;
+  const c=cv.getContext("2d");
+  c.clearRect(0,0,34,34);c.fillStyle="#111";
+  const g=glyphs[code];
+  for(let y=0;y<GLYPH_H;y++)for(let x=0;x<GLYPH_W;x++){
+    if(g[y*GLYPH_W+x]) c.fillRect(5+x,5+y,1,1);
+  }
+}
+function buildKeyboard(){
+  const kb=document.getElementById("keyboard");
+  kb.innerHTML="";
+  for(const row of rows){
+    const r=document.createElement("div");r.className="keyrow";
+    for(const code of row){
+      const b=document.createElement("button");b.className="kkey";
+      const cv=document.createElement("canvas");
+      b.appendChild(cv);b.addEventListener("click",()=>insertCode(code));
+      r.appendChild(b);drawKeyCanvas(cv,code);
+    }
+    kb.appendChild(r);
+  }
+}
+
+/* ========= FILE IO ========= */
+document.getElementById("newBtn").onclick=()=>{
+  codes=[];cursor=0;currentName="document.k6t";
+  headingOpen=false;emphOpen=false;status.textContent="NEW";render();
+};
+document.getElementById("openFile").addEventListener("change",async e=>{
+  const f=e.target.files[0];if(!f)return;
+  try{
+    codes=loadK6T(await f.arrayBuffer());
+    cursor=codes.length;currentName=f.name||"document.k6t";
+    headingOpen=false;emphOpen=false;
+    status.textContent=`OPENED ${codes.length} SIGNS`;
+    render();
+  }catch(err){alert(err.message)}
+  e.target.value="";
+});
+document.getElementById("saveBtn").onclick=()=>{
+  const data=saveK6T(codes);
+  const blob=new Blob([data],{type:"application/octet-stream"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);a.download=currentName.endsWith(".k6t")?currentName:"document.k6t";
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  status.textContent=`SAVED ${codes.length} SIGNS`;
+};
+document.getElementById("leftBtn").onclick=moveLeft;
+document.getElementById("rightBtn").onclick=moveRight;
+document.getElementById("backBtn").onclick=backspace;
+document.getElementById("retBtn").onclick=()=>insertCode(NEWLINE);
+document.getElementById("headingBtn").onclick=toggleHeading;
+document.getElementById("emphBtn").onclick=toggleEmph;
+document.getElementById("darkBtn").onclick=()=>{dark=!dark;status.textContent=dark?"DARK ON":"DARK OFF";render()};
+
+window.addEventListener("keydown",e=>{
+  if(e.key==="ArrowLeft"){e.preventDefault();moveLeft()}
+  if(e.key==="ArrowRight"){e.preventDefault();moveRight()}
+  if(e.key==="Backspace"){e.preventDefault();backspace()}
+  if(e.key==="Enter"){e.preventDefault();insertCode(NEWLINE)}
+});
+window.addEventListener("resize",render);
+
+/* Drag and drop */
+const wrap=document.getElementById("paperWrap");
+wrap.addEventListener("dragover",e=>{e.preventDefault()});
+wrap.addEventListener("drop",async e=>{
+  e.preventDefault();
+  const f=e.dataTransfer.files[0];
+  if(!f)return;
+  try{
+    codes=loadK6T(await f.arrayBuffer());
+    cursor=codes.length;currentName=f.name||"document.k6t";
+    status.textContent=`OPENED ${codes.length} SIGNS`;
+    render();
+  }catch(err){alert(err.message)}
+});
+
+rasterizeGlyphs();
+buildKeyboard();
+render();
+</script>
+</body>
+</html>
