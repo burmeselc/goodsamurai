@@ -1,4 +1,4 @@
-const CACHE = "sekikana-journal-v1";
+const CACHE = "sekikana-journal-v2";
 const ASSETS = [
   "./",
   "./index.html",
