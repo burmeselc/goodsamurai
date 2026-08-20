@@ -8,6 +8,7 @@ const ASSETS = [
   "./manifest.json",
   "./icons/icon-192.svg",
   "./icons/icon-512.svg",
+  "./fonts/ryakuji.ttf",
 ];
 
 self.addEventListener("install", event => {
